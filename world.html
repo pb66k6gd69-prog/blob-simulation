@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Blob World Simulation</title>
+<style>
+  body { margin: 0; overflow: hidden; background: black; }
+  canvas { display: block; }
+  #debugBox {
+    position: absolute; top: 0; right: 0; width: 250px; height: 200px;
+    background: rgba(0,0,0,0.8); color: lime; font-family: monospace;
+    font-size: 12px; overflow-y: auto; padding: 5px; z-index: 100;
+  }
+  #debugInput {
+    width: 100%; box-sizing: border-box; font-family: monospace; font-size:12px;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="debugBox">
+  <div id="debugOutput"></div>
+  <input type="text" id="debugInput" placeholder="Type JS here">
+</div>
+<script>
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
+
+// --- DEBUG ---
+const debugOutput = document.getElementById("debugOutput");
+const debugInput = document.getElementById("debugInput");
+function logDebug(msg){ 
+  debugOutput.innerHTML += msg + "<br>"; 
+  debugOutput.scrollTop = debugOutput.scrollHeight; 
+}
+debugInput.addEventListener("keydown", e=>{
+  if(e.key==="Enter"){ 
+    try{ let res = eval(debugInput.value); logDebug("=> "+res); } 
+    catch(err){ logDebug("ERROR: "+err); } 
+    debugInput.value="";
+  }
+});
+
+// --- WORLD ---
+const TILE = 10;
+const COLS = Math.floor(canvas.width / TILE);
+const ROWS = Math.floor(canvas.height / TILE);
+let time = 0;
+const world=[];
+for(let y=0;y<ROWS;y++){
+  world[y]=[];
+  for(let x=0;x<COLS;x++){
+    let r=Math.random();
+    world[y][x]=r<0.05?"water":r<0.25?"tree":r<0.35?"rock":"land";
+  }
+}
+const pheromones=[];
+for(let y=0;y<ROWS;y++){ pheromones[y]=[]; for(let x=0;x<COLS;x++) pheromones[y][x]=0; }
+const fires=[];
+
+// --- FIRE CLASS ---
+class Fire {
+  constructor(x,y){ this.x=x; this.y=y; this.life=50; }
+  update(){ this.life--; if(Math.random()<0.02){ let dirs=[[1,0],[-1,0],[0,1],[0,-1]]; let d=dirs[Math.floor(Math.random()*dirs.length)]; let nx=this.x+d[0], ny=this.y+d[1]; if(nx>=0&&ny>=0&&nx<COLS&&ny<ROWS){ let t=world[ny][nx]; if(t==="tree" && Math.random()<0.3) fires.push(new Fire(nx,ny)); } } }
+  draw(){ctx.fillStyle="orange"; ctx.fillRect(this.x*TILE,this.y*TILE,TILE,TILE);}
+}
+
+// --- BLOB CLASS ---
+class Blob {
+  constructor(){
+    this.x=Math.floor(Math.random()*COLS);
+    this.y=Math.floor(Math.random()*ROWS);
+    this.hp=100; this.hunger=0; this.stamina=100;
+    this.curiosity=Math.random()*2; this.memory={};
+    this.carry=null; this.structures=[];
+  }
+  sense(tile,nx,ny){ if(!(tile in this.memory)) this.memory[tile]=0; let pher = pheromones[ny][nx]||0; return this.memory[tile]+pher*0.5; }
+  act(){ const dirs=[[1,0],[-1,0],[0,1],[0,-1]]; let best=null,bestScore=-999; for(let d of dirs){ let nx=this.x+d[0], ny=this.y+d[1]; if(nx<0||ny<0||nx>=COLS||ny>=ROWS) continue; let tile=world[ny][nx]; let score=this.sense(tile,nx,ny)+Math.random()*this.curiosity; if(score>bestScore){bestScore=score; best=d;} } if(best){ this.x+=best[0]; this.y+=best[1]; this.stamina-=0.3; } pheromones[this.y][this.x]=Math.min(100,(pheromones[this.y][this.x]||0)+5); }
+  interact(){
+    let tile=world[this.y][this.x];
+    if(tile==="tree"){ this.hunger-=5; this.hp+=1; this.memory[tile]+=1; if(Math.random()<0.01){ fires.push(new Fire(this.x,this.y)); logDebug("Blob discovered fire!"); } }
+    if(tile==="rock"){ if(!this.carry && Math.random()<0.05){ this.carry="rock"; logDebug("Blob picked up a rock."); } }
+    if(tile==="water"){ this.hp-=2; this.memory[tile]-=2; logDebug("Blob touched water and got hurt."); }
+    for(let f of fires){ if(f.x===this.x && f.y===this.y){ this.hp-=3; logDebug("Blob burned!"); } }
+    if(this.carry==="rock"){ for(let f of fires){ if(Math.abs(f.x-this.x)<=1 && Math.abs(f.y-this.y)<=1){ this.carry="hot rock"; this.memory["hot rock"]=1; logDebug("Blob heated a rock!"); } } }
+    if(this.carry==="hot rock" && Math.random()<0.01){ this.structures.push({x:this.x,y:this.y,type:"shelter"}); logDebug("Blob built a shelter!"); this.carry=null; }
+  }
+  update(){ this.hunger+=0.1; if(this.hunger>100) this.hp-=0.5; if(this.stamina<20) this.hp-=0.2; this.act(); this.interact(); }
+  draw(){ ctx.fillStyle="red"; ctx.beginPath(); ctx.arc(this.x*TILE+TILE/2,this.y*TILE+TILE/2,TILE/2,0,Math.PI*2); ctx.fill(); if(this.carry==="rock"){ctx.fillStyle="grey"; ctx.fillRect(this.x*TILE+TILE/4,this.y*TILE+TILE/4,TILE/2,TILE/2);} if(this.carry==="hot rock"){ctx.fillStyle="orange"; ctx.fillRect(this.x*TILE+TILE/4,this.y*TILE+TILE/4,TILE/2,TILE/2);} for(let s of this.structures){ctx.fillStyle="#774411"; ctx.fillRect(s.x*TILE,s.y*TILE,TILE,TILE);} }
+}
+
+// --- ANIMAL CLASS ---
+class Animal{ constructor(){ this.x=Math.floor(Math.random()*COLS); this.y=Math.floor(Math.random()*ROWS);} update(){ const dirs=[[1,0],[-1,0],[0,1],[0,-1]]; let d=dirs[Math.floor(Math.random()*dirs.length)]; let nx=this.x+d[0], ny=this.y+d[1]; if(nx>=0&&ny>=0&&nx<COLS&&ny<ROWS){this.x=nx; this.y=ny;} } draw(){ctx.fillStyle="yellow"; ctx.fillRect(this.x*TILE,this.y*TILE,TILE,TILE);}}
+
+// --- ENTITIES ---
+const blobs=[]; for(let i=0;i<20;i++) blobs.push(new Blob());
+const animals=[]; for(let i=0;i<10;i++) animals.push(new Animal());
+
+// --- DRAW WORLD ---
+function drawWorld(){
+  let night=Math.sin(time/500)*0.5+0.5;
+  for(let y=0;y<ROWS;y++){ for(let x=0;x<COLS;x++){ let t=world[y][x],c="#44aa44"; if(t==="water")c="#3366cc"; if(t==="tree")c="#553311"; if(t==="rock")c="#888888"; if(pheromones[y][x]>0){ let alpha=Math.min(0.5,pheromones[y][x]/100); ctx.fillStyle=`rgba(200,200,255,${alpha})`; ctx.fillRect(x*TILE,y*TILE,TILE,TILE);} ctx.fillStyle=c; ctx.fillRect(x*TILE,y*TILE,TILE,TILE); } }
+  ctx.fillStyle=`rgba(0,0,0,${night*0.4})`; ctx.fillRect(0,0,canvas.width,canvas.height);
+  for(let y=0;y<ROWS;y++) for(let x=0;x<COLS;x++) pheromones[y][x]*=0.99;
+}
+
+// --- MAIN LOOP ---
+function loop(){ time++; ctx.clearRect(0,0,canvas.width,canvas.height); drawWorld(); for(let i=fires.length-1;i>=0;i--){fires[i].update(); fires[i].draw(); if(fires[i].life<=0) fires.splice(i,1);} for(let a of animals){a.update(); a.draw();} for(let i=blobs.length-1;i>=0;i--){blobs[i].update(); blobs[i].draw(); if(blobs[i].hp<=0) blobs.splice(i,1);} requestAnimationFrame(loop);}
+loop();
+</script>
+</body>
+</html>
