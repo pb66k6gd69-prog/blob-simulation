@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Primal Survival Simulation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body { margin:0; overflow:hidden; background:#111; font-family:sans-serif; color:#fff; }
+  canvas { display:block; margin:0 auto; background:#222; }
+  #info { position:absolute; top:10px; left:10px; right:10px; background:rgba(0,0,0,0.6); padding:5px; font-size:12px; z-index:10; }
+</style>
+</head>
+<body>
+<canvas id="worldCanvas"></canvas>
+<div id="info">Loading simulation...</div>
+<script>
+
+// ==========================
+// Canvas & World Setup
+// ==========================
+const canvas = document.getElementById('worldCanvas');
+const ctx = canvas.getContext('2d');
+const info = document.getElementById('info');
+
+function resize() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize);
+resize();
+
+// Map parameters
+const TILE_SIZE = 32;
+const MAP_WIDTH = 50;
+const MAP_HEIGHT = 30;
+
+// Tiles: 0=water,1=plains,2=forest,3=mountain,4=ruins,5=ice,6=food
+let mapData = [];
+for(let y=0;y<MAP_HEIGHT;y++){
+  mapData[y]=[];
+  for(let x=0;x<MAP_WIDTH;x++){ mapData[y][x]=1; }
+}
+
+// ===== Create Biomes =====
+// Water bottom
+for(let y=Math.floor(MAP_HEIGHT*0.7);y<MAP_HEIGHT;y++)
+  for(let x=0;x<MAP_WIDTH;x++) mapData[y][x]=0;
+
+// Small island
+const centerX = MAP_WIDTH/2, centerY = MAP_HEIGHT*0.8;
+for(let y=Math.floor(MAP_HEIGHT*0.7);y<MAP_HEIGHT;y++){
+  for(let x=0;x<MAP_WIDTH;x++){
+    let dx = x-centerX, dy=y-centerY;
+    if(dx*dx+dy*dy<100) mapData[y][x]=1;
+  }
+}
+
+// Ruins top-left
+for(let y=0;y<Math.floor(MAP_HEIGHT*0.4);y++)
+  for(let x=0;x<Math.floor(MAP_WIDTH*0.4);x++)
+    if(Math.random()<0.2) mapData[y][x]=4;
+
+// Ice top-right
+for(let y=0;y<Math.floor(MAP_HEIGHT*0.4);y++)
+  for(let x=Math.floor(MAP_WIDTH*0.6);x<MAP_WIDTH;x++)
+    if(Math.random()<0.7) mapData[y][x]=5;
+
+// Mountains & forests
+for(let y=Math.floor(MAP_HEIGHT*0.4);y<Math.floor(MAP_HEIGHT*0.7);y++)
+  for(let x=0;x<MAP_WIDTH;x++)
+    if(mapData[y][x]===1 && Math.random()<0.1) mapData[y][x]=3;
+
+for(let y=0;y<Math.floor(MAP_HEIGHT*0.7);y++)
+  for(let x=0;x<MAP_WIDTH;x++)
+    if(mapData[y][x]===1 && Math.random()<0.2) mapData[y][x]=2;
+
+// Initial food
+for(let y=0;y<MAP_HEIGHT;y++)
+  for(let x=0;x<MAP_WIDTH;x++)
+    if(mapData[y][x]===1 && Math.random()<0.02) mapData[y][x]=6;
+
+// ==========================
+// Blob Class
+// ==========================
+class Blob {
+  constructor(x,y,race){
+    this.x=x; this.y=y; this.race=race;
+    this.color=race===0?'orange':'lightblue';
+    this.hunger=100; this.thirst=100; this.stamina=100;
+    this.hp=100; this.oxygen=100; this.temperature=20;
+    this.age=0; this.lifespan=5000+Math.random()*2000;
+    // Traits: speed, curiosity, metabolism, coldResist, heatResist
+    this.traits={speed:Math.random()*2+1,curiosity:Math.random(),metabolism:Math.random(),coldResist:Math.random(),heatResist:Math.random()};
+    this.beliefs={}; // emergent religion/faiths
+    this.messages=[];
+  }
+
+  chooseAction(){
+    // Hunger/thirst high priority
+    if(this.hunger<50) return 'seekFood';
+    if(this.thirst<50) return 'seekWater';
+    // Low stamina
+    if(this.stamina<30) return 'rest';
+    // Random exploration
+    if(Math.random()<this.traits.curiosity) return 'wander';
+    return 'idle';
+  }
+
+  performAction(action){
+    let speed=this.traits.speed;
+    if(action==='wander'){
+      this.x += (Math.random()-0.5)*speed*5;
+      this.y += (Math.random()-0.5)*speed*5;
+      this.stamina=Math.max(0,this.stamina-0.05);
+    } else if(action==='seekFood'){ this.moveTowardTile(6); }
+    else if(action==='seekWater'){ this.moveTowardTile(0); }
+    else if(action==='rest'){ this.stamina=Math.min(100,this.stamina+0.2); }
+    this.x=Math.max(0,Math.min(this.x,MAP_WIDTH*TILE_SIZE));
+    this.y=Math.max(0,Math.min(this.y,MAP_HEIGHT*TILE_SIZE));
+  }
+
+  moveTowardTile(tileType){
+    let closest=null,dist=Infinity;
+    for(let y=0;y<MAP_HEIGHT;y++){
+      for(let x=0;x<MAP_WIDTH;x++){
+        if(mapData[y][x]===tileType){
+          let dx=this.x-x*TILE_SIZE,dy=this.y-y*TILE_SIZE;
+          let d=dx*dx+dy*dy;
+          if(d<dist){ dist=d; closest={x:x*TILE_SIZE,y:y*TILE_SIZE}; }
+        }
+      }
+    }
+    if(closest){
+      this.x += Math.sign(closest.x-this.x)*this.traits.speed*2;
+      this.y += Math.sign(closest.y-this.y)*this.traits.speed*2;
+    }
+  }
+
+  update(){
+    this.age++; 
+    this.hunger-=0.02*this.traits.metabolism; 
+    this.thirst-=0.03*this.traits.metabolism;
+    this.stamina=Math.max(0,this.stamina-0.01);
+    this.oxygen=100; // For simplicity, can expand with swimming/drowning
+
+    if(this.hunger<=0||this.thirst<=0||this.age>this.lifespan) this.hp-=0.2;
+    if(this.hp<=0) return false;
+
+    let action=this.chooseAction();
+    this.performAction(action);
+
+    // Interact with tile
+    let tileX=Math.floor(this.x/TILE_SIZE);
+    let tileY=Math.floor(this.y/TILE_SIZE);
+    if(mapData[tileY]&&mapData[tileY][tileX]===6 && this.hunger<80){
+      this.hunger=100; this.stamina=Math.min(100,this.stamina+10);
+      mapData[tileY][tileX]=1;
+      this.messages.push("Found food!");
+    }
+    return true;
+  }
+
+  draw(){
+    ctx.fillStyle=this.color;
+    ctx.beginPath();
+    ctx.arc(this.x,this.y,TILE_SIZE/4,0,2*Math.PI);
+    ctx.fill();
+  }
+}
+
+// ==========================
+// Initialize Blobs
+// ==========================
+let blobs=[];
+for(let i=0;i<10;i++) blobs.push(new Blob(Math.random()*MAP_WIDTH*TILE_SIZE,Math.random()*MAP_HEIGHT*TILE_SIZE,0));
+for(let i=0;i<10;i++) blobs.push(new Blob(Math.random()*MAP_WIDTH*TILE_SIZE,Math.random()*MAP_HEIGHT*TILE_SIZE,1));
+
+// ==========================
+// Draw Map
+// ==========================
+function drawMap(){
+  for(let y=0;y<MAP_HEIGHT;y++){
+    for(let x=0;x<MAP_WIDTH;x++){
+      let tile=mapData[y][x];
+      let px=x*TILE_SIZE,py=y*TILE_SIZE;
+      if(tile===0) ctx.fillStyle='#3366cc';
+      else if(tile===1) ctx.fillStyle='#88aa55';
+      else if(tile===2) ctx.fillStyle='#557733';
+      else if(tile===3) ctx.fillStyle='#666644';
+      else if(tile===4) ctx.fillStyle='#444444';
+      else if(tile===5) ctx.fillStyle='#eeeeff';
+      else if(tile===6) ctx.fillStyle='red';
+      ctx.fillRect(px,py,TILE_SIZE,TILE_SIZE);
+    }
+  }
+}
+
+// ==========================
+// Main Loop
+// ==========================
+function loop(){
+  blobs=blobs.filter(b=>b.update());
+  drawMap();
+  for(let b of blobs) b.draw();
+
+  // Display info
+  let msg="";
+  for(let b of blobs){
+    if(b.messages.length>0) msg+=b.messages.shift()+" ";
+  }
+  info.innerHTML="Blobs: "+blobs.length+" | "+msg;
+  requestAnimationFrame(loop);
+}
+
+loop();
+
+</script>
+</body>
+</html>
